@@ -57,7 +57,12 @@ namespace Ped{
 
 		// The agents in this scenario
 		std::vector<Tagent*> agents;
-
+		//Assignment 2
+		std::vector<float> agentX;
+    	std::vector<float> agentY;
+		std::vector<float> destX;
+    	std::vector<float> destY;
+		std::vector<float> destR;
 		// The waypoints in this scenario
 		std::vector<Twaypoint*> destinations;
 

@@ -72,3 +72,10 @@ Ped::Twaypoint* Ped::Tagent::getNextDestination() {
 
 	return nextDestination;
 }
+
+
+int Ped::Tagent::getDestX() const { return destination ? destination->getx() : -1; }
+int Ped::Tagent::getDestY() const { return destination ? destination->gety() : -1; }
+int Ped::Tagent::getDestR() const { return destination ? destination->getr() : -1; }
+// Helper to check if we have a destination
+bool Ped::Tagent::hasDestination() const { return destination != NULL; }

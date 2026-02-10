@@ -48,6 +48,14 @@ namespace Ped {
 		// Adds a new waypoint to reach for this agent
 		void addWaypoint(Twaypoint* wp);
 
+		// Assignment 2
+		// Helper to get the Waypoint coordinates directly
+		int getDestX() const;
+		int getDestY() const;
+		int getDestR() const;
+		bool hasDestination() const;
+
+
 	private:
 		Tagent() {};
 
