@@ -25,9 +25,9 @@
 #ifndef NOCDUA
 #include "cuda_testkernel.h"
 #endif
-
+#include <mutex>
 #include <stdlib.h>
-
+#include <cmath>
 // Assignment 2
 // #include <emmintrin.h> // SSE2
 // #include <smmintrin.h> // SSE4.1
@@ -54,7 +54,6 @@ void Ped::Model::setup(std::vector<Ped::Tagent *> agentsInScenario, std::vector<
 	setupHeatmapSeq();
 
 	// Assignment 2
-	// --- ADD THIS BLOCK BELOW OR YOU DIE ---
 
 	// 1. Allocate Memory: Make our new arrays the same size as the number of agents
 	int N = agents.size();
@@ -69,10 +68,10 @@ void Ped::Model::setup(std::vector<Ped::Tagent *> agentsInScenario, std::vector<
 		agentX[i] = agents[i]->getX();
 		agentY[i] = agents[i]->getY();
 
-		// Force agent to pick its first waypoint
+		// Pick first waypoint
 		agents[i]->computeNextDesiredPosition();
 
-		// Implementation 1: Save that waypoint into our SoA arrays
+		// Imp Save that waypoint into our SoA arrays
 		if (agents[i]->hasDestination())
 		{
 			destX[i] = agents[i]->getDestX();
@@ -86,22 +85,6 @@ void Ped::Model::setup(std::vector<Ped::Tagent *> agentsInScenario, std::vector<
 			destY[i] = agentY[i];
 			destR[i] = 0;
 		}
-		/*
-			// Implementation 2:
-			for (int i = 0; i < agents.size(); ++i)
-		{
-			// Copy current position
-			agentX[i] = agents[i]->getX();
-			agentY[i] = agents[i]->getY();
-
-			// Ask the agent to calculate its first target so we have a valid destination
-			agents[i]->computeNextDesiredPosition();
-
-			// Copy that destination into our arrays
-			destX[i] = agents[i]->getDesiredX();
-			destY[i] = agents[i]->getDesiredY();
-		}
-		*/
 	}
 }
 
@@ -113,7 +96,6 @@ void Ped::Model::tick()
 	{
 		int N = agents.size();
 
-		// --- LOOP 1: SIMD MOVEMENT (The Fast Part) ---
 		// We step by 4 because SSE processes 4 floats at a time
 		for (int i = 0; i < N; i += 4)
 		{
@@ -151,8 +133,7 @@ void Ped::Model::tick()
 			_mm_storeu_ps(&agentX[i], nextX);
 			_mm_storeu_ps(&agentY[i], nextY);
 		}
-
-		// --- LOOP 2: CLEANUP & LOGIC (The Slow Part) ---
+		
 		for (int i = 0; i < N; ++i)
 		{
 			// 1. Sync the Object (Required so the GUI sees the movement!)
@@ -187,19 +168,65 @@ void Ped::Model::tick()
 		for (int i = 0; i < agents.size(); i++)
 		{
 			agents[i]->computeNextDesiredPosition();
-			agents[i]->setX(agents[i]->getDesiredX());
-			agents[i]->setY(agents[i]->getDesiredY());
+			move(agents[i]);
 		}
 		break;
 
 	case Ped::OMP:
 	{
-#pragma omp parallel for
+		// 1. Calculate desired positions for all agents. 
+		// We can safely parallelize this step with a simple OpenMP for loop.
+		#pragma omp parallel for num_threads(8)
 		for (int i = 0; i < agents.size(); i++)
 		{
 			agents[i]->computeNextDesiredPosition();
-			agents[i]->setX(agents[i]->getDesiredX());
-			agents[i]->setY(agents[i]->getDesiredY());
+		}
+
+		// 2. Create an array of 4 vectors to represent our 4 regions
+		std::vector<std::vector<Ped::Tagent*>> regions(4);
+
+		// 3. Deal the agents into the 4 regions based on their current X/Y coordinates
+		for (Ped::Tagent* agent : agents) {
+			int x = agent->getX();
+			int y = agent->getY();
+
+			if (x < 80 && y < 60) {
+				regions[0].push_back(agent); // Top-Left
+			} else if (x >= 80 && y < 60) {
+				regions[1].push_back(agent); // Top-Right
+			} else if (x < 80 && y >= 60) {
+				regions[2].push_back(agent); // Bottom-Left
+			} else {
+				regions[3].push_back(agent); // Bottom-Right
+			}
+		}
+
+		// 4. Process the 4 regions in parallel
+		// OpenMP will assign each iteration of this loop (each region) to a different thread.
+		#pragma omp parallel for num_threads(4)
+		for (int r = 0; r < 4; r++) {
+			
+			// Loop through every agent in this specific region
+			for (Ped::Tagent* agent : regions[r]) {
+				int x = agent->getX();
+				int y = agent->getY();
+
+				// Check if the agent is within 2 units of the borders (x=80, y=60)
+				bool near_border = (x >= 78 && x <= 81) || (y >= 58 && y <= 61);
+
+				if (near_border) {
+					// The agent is near a border! We use OpenMP's critical section.
+					// Only ONE thread is allowed to be inside a "critical" block at a time.
+					#pragma omp critical
+					{
+						move(agent);
+					}
+				} else {
+					// The agent is safely deep inside the region. 
+					// Threads can execute this simultaneously without waiting!
+					move(agent);
+				}
+			}
 		}
 		break;
 	}
@@ -310,13 +337,24 @@ void Ped::Model::move(Ped::Tagent *agent)
 /// \param   x the x coordinate
 /// \param   y the y coordinate
 /// \param   dist the distance around x/y that will be searched for agents (search field is a square in the current implementation)
-set<const Ped::Tagent *> Ped::Model::getNeighbors(int x, int y, int dist) const
-{
-
-	// create the output list
-	// ( It would be better to include only the agents close by, but this programmer is lazy.)
-	return set<const Ped::Tagent *>(agents.begin(), agents.end());
-}
+		set<const Ped::Tagent *> Ped::Model::getNeighbors(int x, int y, int dist) const
+		{
+			set<const Ped::Tagent *> neighbors;
+			
+			// Check every agent
+			for (int i = 0; i < agents.size(); i++) {
+				// Calculate how far away they are
+				int diffX = std::abs(agents[i]->getX() - x);
+				int diffY = std::abs(agents[i]->getY() - y);
+				
+				// If they are close, add them to the list!
+				if (diffX <= dist && diffY <= dist) {
+					neighbors.insert(agents[i]);
+				}
+			}
+			
+			return neighbors;
+		}
 
 void Ped::Model::cleanup()
 {
