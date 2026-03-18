@@ -5,6 +5,7 @@
 //
 // Adapted for Low Level Parallel Programming 2017
 //
+#include <chrono>
 #include "ped_model.h"
 #include "ped_waypoint.h"
 #include "ped_model.h"
@@ -32,6 +33,9 @@
 // #include <emmintrin.h> // SSE2
 // #include <smmintrin.h> // SSE4.1
 
+extern "C" void startHeatmapCUDA(int* h_agentX, int* h_agentY, int numAgents);
+extern "C" void finishHeatmapCUDA(int* h_blurred);
+
 void Ped::Model::setup(std::vector<Ped::Tagent *> agentsInScenario, std::vector<Twaypoint *> destinationsInScenario, IMPLEMENTATION implementation)
 {
 #ifndef NOCUDA
@@ -51,7 +55,10 @@ void Ped::Model::setup(std::vector<Ped::Tagent *> agentsInScenario, std::vector<
 	this->implementation = implementation;
 
 	// Set up heatmap (relevant for Assignment 4)
+	// Seq version
 	setupHeatmapSeq();
+	// Cuda version
+	//setupHeatmapCuda();
 
 	// Assignment 2
 
@@ -165,13 +172,66 @@ void Ped::Model::tick()
 	}
 
 	case Ped::SEQ:
+		{
+		// Seq version
+		auto tickStart = std::chrono::high_resolution_clock::now();
+		for (int i = 0; i < agents.size(); i++) {
+			agents[i]-> computeNextDesiredPosition();
+			move(agents[i]);
+		}
+		updateHeatmapSeq();
+		auto tickStop = std::chrono::high_resolution_clock::now();
+		std::chrono::duration<double, std::milli> totalTickTime = tickStop - tickStart;
+		static int frame = 0;
+		printf("%d,%f\n", frame++, totalTickTime.count());
+
+		// CUDA version
+		/*
+		updateHeatmapCuda();
+		break;
+		*/
+		/*
+		// Prepare data for GPU
+    	std::vector<int> h_x(agents.size()), h_y(agents.size());
 		for (int i = 0; i < agents.size(); i++)
 		{
 			agents[i]->computeNextDesiredPosition();
-			move(agents[i]);
+			h_x[i] = agents[i]->getDesiredX();
+        	h_y[i] = agents[i]->getDesiredY();
 		}
-		break;
 
+		auto tickStart = std::chrono::high_resolution_clock::now();
+
+		
+		// 2. Yell at the GPU to start computing (Returns instantly)
+        startHeatmapCUDA(h_x.data(), h_y.data(), agents.size());
+
+		auto cpuStart = std::chrono::high_resolution_clock::now();
+		// 2. WHILE GPU is working, CPU does collisions
+		for (int i = 0; i < agents.size(); i++) {
+			move(agents[i]); 
+		}
+
+		auto cpuStop = std::chrono::high_resolution_clock::now();
+		std::chrono::duration<double, std::milli> cpuTime = cpuStop - cpuStart;
+		// 4. Wait for GPU to finish and grab the image
+        finishHeatmapCUDA(blurred_heatmap[0]);
+
+		auto tickStop = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> totalTickTime = tickStop - tickStart;
+
+		static int frameCounter = 0;
+        if (frameCounter++ % 50 == 0) {
+            std::cout << "\n--- CONCURRENCY PROOF [Frame " << frameCounter << "] ---\n";
+            std::cout << "CPU Collision Time: " << cpuTime.count() << " ms\n";
+            std::cout << "TOTAL Tick Time:    " << totalTickTime.count() << " ms\n";
+            std::cout << "------------------------------------\n";
+        }
+
+		// updateHeatmapSeq();
+		break;
+		*/
+	}
 	case Ped::OMP:
 	{
 		// 1. Calculate desired positions for all agents. 

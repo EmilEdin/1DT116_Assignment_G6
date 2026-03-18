@@ -3,7 +3,7 @@
 // Implements the heatmap functionality. 
 //
 #include "ped_model.h"
-
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <cmath>

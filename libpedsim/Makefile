@@ -1,1 +1,1 @@
-Makefile.nocuda
+Makefile.cuda
